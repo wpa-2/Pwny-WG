@@ -8,7 +8,7 @@ from pwnagotchi.ui.view import BLACK
 
 class WireGuard(plugins.Plugin):
     __author__ = 'WPA2'
-    __version__ = '1.1.0' 
+    __version__ = '1.1.0' # Final version with UI
     __license__ = 'GPL3'
     __description__ = 'A plugin to automatically connect to a WireGuard VPN and upload handshakes.'
 
@@ -29,15 +29,14 @@ class WireGuard(plugins.Plugin):
 
     def on_ui_setup(self, ui):
         """
-        This method is called when the UI is Displayed
+        This method is called when the UI is Displayed to add a new element.
         """
-        # Add a LabeledValue element to the UI
-        # You can change the position and font here
+        # Add a LabeledValue element to the UI for the status
         ui.add_element('wg_status', LabeledValue(
             color=BLACK,
             label='WG:',
             value=self.status,
-            position=(0, 0), # Position (X, Y)
+            position=(0, 0), # Position (X, Y) from top-left
             label_font=fonts.Small,
             text_font=fonts.Small
         ))
@@ -50,12 +49,14 @@ class WireGuard(plugins.Plugin):
         self.status = "Connecting"
         
         try:
+            # Defensively bring down the interface first to clear any stale state.
             subprocess.run(["wg-quick", "down", self.wg_config_path], capture_output=True)
         except FileNotFoundError:
-            logging.error("[WireGuard] `wg-quick` command not found.")
+            logging.error("[WireGuard] `wg-quick` command not found. Please run: sudo apt-get install wireguard-tools")
             self.status = "No wg-quick"
             return False
 
+        # Build the configuration from the user's config.toml
         conf = f"""
 [Interface]
 PrivateKey = {self.options['private_key']}
@@ -77,8 +78,9 @@ PersistentKeepalive = 25
         try:
             with open(self.wg_config_path, "w") as f:
                 f.write(conf)
-            os.chmod(self.wg_config_path, 0o600)
+            os.chmod(self.wg_config_path, 0o600) # Secure the config file
 
+            # Bring the interface up
             subprocess.run(["wg-quick", "up", self.wg_config_path], check=True, capture_output=True)
             self.status = "Up"
             logging.info("[WireGuard] Connection established.")
@@ -88,6 +90,7 @@ PersistentKeepalive = 25
             self.status = "Error"
             logging.error(f"[WireGuard] Connection failed: {e}")
             if hasattr(e, 'stderr'):
+                # Format stderr to a single line to prevent log parsing errors
                 stderr_output = e.stderr.decode('utf-8').replace('\n', ' | ').strip()
                 logging.error(f"[WireGuard] Stderr: {stderr_output}")
             return False
@@ -110,6 +113,7 @@ PersistentKeepalive = 25
             server_user = self.options['server_user']
             server_ip = self.options['peer_endpoint'].split(':')[0]
 
+            # For SCP to work without a password, SSH keys must be set up.
             command = ["scp", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes", "-o", "UserKnownHostsFile=/dev/null", filename, f"{server_user}@{server_ip}:{remote_path}"]
             
             try:
@@ -140,6 +144,7 @@ PersistentKeepalive = 25
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 logging.error(f"[WireGuard] Failed to disconnect: {e}")
         
+        # This is the corrected block to remove the UI element
         with ui._lock:
             try:
                 if 'wg_status' in ui.get_elements():
