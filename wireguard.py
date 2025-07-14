@@ -2,10 +2,13 @@ import logging
 import os
 import subprocess
 import pwnagotchi.plugins as plugins
+import pwnagotchi.ui.fonts as fonts
+from pwnagotchi.ui.components import LabeledValue
+from pwnagotchi.ui.view import BLACK
 
 class WireGuard(plugins.Plugin):
-    __author__ = 'Your Name'
-    __version__ = '1.0.3' # Updated version
+    __author__ = 'WPA2'
+    __version__ = '1.1.0' 
     __license__ = 'GPL3'
     __description__ = 'A plugin to automatically connect to a WireGuard VPN and upload handshakes.'
 
@@ -15,13 +18,34 @@ class WireGuard(plugins.Plugin):
         self.wg_config_path = "/tmp/wg0.conf"
 
     def on_loaded(self):
+        """
+        Called when the plugin is loaded.
+        """
         logging.info("[WireGuard] Plugin loaded.")
         if not self.options or 'private_key' not in self.options:
             logging.error("[WireGuard] Configuration is missing. Please edit /etc/pwnagotchi/config.toml")
             return
         self.ready = True
 
+    def on_ui_setup(self, ui):
+        """
+        This method is called when the UI is Displayed
+        """
+        # Add a LabeledValue element to the UI
+        # You can change the position and font here
+        ui.add_element('wg_status', LabeledValue(
+            color=BLACK,
+            label='WG:',
+            value=self.status,
+            position=(0, 0), # Position (X, Y)
+            label_font=fonts.Small,
+            text_font=fonts.Small
+        ))
+
     def _connect(self):
+        """
+        Builds the config and brings the WireGuard interface up.
+        """
         logging.info("[WireGuard] Attempting to connect...")
         self.status = "Connecting"
         
@@ -29,7 +53,7 @@ class WireGuard(plugins.Plugin):
             subprocess.run(["wg-quick", "down", self.wg_config_path], capture_output=True)
         except FileNotFoundError:
             logging.error("[WireGuard] `wg-quick` command not found.")
-            self.status = "Error"
+            self.status = "No wg-quick"
             return False
 
         conf = f"""
@@ -56,7 +80,7 @@ PersistentKeepalive = 25
             os.chmod(self.wg_config_path, 0o600)
 
             subprocess.run(["wg-quick", "up", self.wg_config_path], check=True, capture_output=True)
-            self.status = "Connected"
+            self.status = "Up"
             logging.info("[WireGuard] Connection established.")
             return True
 
@@ -69,11 +93,17 @@ PersistentKeepalive = 25
             return False
 
     def on_internet_available(self, agent):
-        if self.ready and self.status != "Connected":
+        """
+        Called when internet is available. We use this to trigger the connection.
+        """
+        if self.ready and self.status not in ["Up", "Connecting"]:
             self._connect()
 
     def on_handshake(self, agent, filename, access_point, client_station):
-        if self.ready and self.status == "Connected":
+        """
+        Called when a new handshake is captured.
+        """
+        if self.ready and self.status == "Up":
             logging.info(f"[WireGuard] New handshake captured. Uploading {filename}...")
             
             remote_path = os.path.join(self.options['handshake_dir'], os.path.basename(filename))
@@ -92,10 +122,16 @@ PersistentKeepalive = 25
                     logging.error(f"[WireGuard] Stderr: {stderr_output}")
 
     def on_ui_update(self, ui):
+        """
+        Called when the UI is updated.
+        """
         if self.ready:
             ui.set('wg_status', self.status)
 
     def on_unload(self, ui):
+        """
+        Called when the plugin is unloaded.
+        """
         logging.info("[WireGuard] Unloading plugin and disconnecting.")
         if os.path.exists(self.wg_config_path):
             try:
@@ -104,6 +140,9 @@ PersistentKeepalive = 25
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 logging.error(f"[WireGuard] Failed to disconnect: {e}")
         
-        # This is the corrected line
-        if 'wg_status' in ui.get_elements():
-            ui.remove_element('wg_status')
+        with ui._lock:
+            try:
+                if 'wg_status' in ui.get_elements():
+                    ui.remove_element('wg_status')
+            except KeyError:
+                pass
