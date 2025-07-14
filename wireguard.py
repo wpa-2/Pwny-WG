@@ -8,7 +8,7 @@ from pwnagotchi.ui.view import BLACK
 
 class WireGuard(plugins.Plugin):
     __author__ = 'WPA2'
-    __version__ = '1.1.0' # Final version with UI
+    __version__ = '1.2.0' # Final version with UI fixes
     __license__ = 'GPL3'
     __description__ = 'A plugin to automatically connect to a WireGuard VPN and upload handshakes.'
 
@@ -36,24 +36,26 @@ class WireGuard(plugins.Plugin):
             color=BLACK,
             label='WG:',
             value=self.status,
-            position=(0, 0), # Position (X, Y) from top-left
+            position=(60, 0), # Position (X, Y) from top-left
             label_font=fonts.Small,
             text_font=fonts.Small
         ))
 
-    def _connect(self):
+    def _connect(self, ui):
         """
         Builds the config and brings the WireGuard interface up.
         """
         logging.info("[WireGuard] Attempting to connect...")
         self.status = "Connecting"
-        
+        ui.set('wg_status', self.status) # Force UI update
+
         try:
             # Defensively bring down the interface first to clear any stale state.
             subprocess.run(["wg-quick", "down", self.wg_config_path], capture_output=True)
         except FileNotFoundError:
             logging.error("[WireGuard] `wg-quick` command not found. Please run: sudo apt-get install wireguard-tools")
             self.status = "No wg-quick"
+            ui.set('wg_status', self.status) # Force UI update
             return False
 
         # Build the configuration from the user's config.toml
@@ -83,11 +85,13 @@ PersistentKeepalive = 25
             # Bring the interface up
             subprocess.run(["wg-quick", "up", self.wg_config_path], check=True, capture_output=True)
             self.status = "Up"
+            ui.set('wg_status', self.status) # Force UI update
             logging.info("[WireGuard] Connection established.")
             return True
 
         except subprocess.CalledProcessError as e:
             self.status = "Error"
+            ui.set('wg_status', self.status) # Force UI update
             logging.error(f"[WireGuard] Connection failed: {e}")
             if hasattr(e, 'stderr'):
                 # Format stderr to a single line to prevent log parsing errors
@@ -100,7 +104,7 @@ PersistentKeepalive = 25
         Called when internet is available. We use this to trigger the connection.
         """
         if self.ready and self.status not in ["Up", "Connecting"]:
-            self._connect()
+            self._connect(agent.view())
 
     def on_handshake(self, agent, filename, access_point, client_station):
         """
@@ -147,7 +151,6 @@ PersistentKeepalive = 25
         # This is the corrected block to remove the UI element
         with ui._lock:
             try:
-                if 'wg_status' in ui.get_elements():
-                    ui.remove_element('wg_status')
+                ui.remove_element('wg_status')
             except KeyError:
                 pass
