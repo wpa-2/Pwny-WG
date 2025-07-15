@@ -1,29 +1,37 @@
 import logging
 import os
 import subprocess
+import time
 import pwnagotchi.plugins as plugins
 import pwnagotchi.ui.fonts as fonts
 from pwnagotchi.ui.components import LabeledValue
 from pwnagotchi.ui.view import BLACK
 
 class WireGuard(plugins.Plugin):
-    __author__ = 'WPA2'
-    __version__ = '1.2.0' # Final version with UI fixes
+    __author__ = 'Your Name'
+    __version__ = '1.2.0' # The Rsync Update
     __license__ = 'GPL3'
-    __description__ = 'A plugin to automatically connect to a WireGuard VPN and upload handshakes.'
+    __description__ = 'A plugin to automatically connect to a WireGuard VPN and sync handshakes using rsync.'
 
     def __init__(self):
         self.ready = False
         self.status = "Initializing"
         self.wg_config_path = "/tmp/wg0.conf"
+        self.last_sync_time = 0
+        # Sync every 10 minutes (600 seconds)
+        self.sync_interval = 600
 
     def on_loaded(self):
         """
         Called when the plugin is loaded.
         """
-        logging.info("[WireGuard] Plugin loaded.")
+        logging.info("[WireGuard] Rsync plugin loaded.")
         if not self.options or 'private_key' not in self.options:
             logging.error("[WireGuard] Configuration is missing. Please edit /etc/pwnagotchi/config.toml")
+            return
+        # Check for rsync dependency
+        if not os.path.exists('/usr/bin/rsync'):
+            logging.error("[WireGuard] rsync is not installed. Please run: sudo apt-get install rsync")
             return
         self.ready = True
 
@@ -31,7 +39,6 @@ class WireGuard(plugins.Plugin):
         """
         This method is called when the UI is Displayed to add a new element.
         """
-        # Add a LabeledValue element to the UI for the status
         ui.add_element('wg_status', LabeledValue(
             color=BLACK,
             label='WG:',
@@ -47,18 +54,16 @@ class WireGuard(plugins.Plugin):
         """
         logging.info("[WireGuard] Attempting to connect...")
         self.status = "Connecting"
-        ui.set('wg_status', self.status) # Force UI update
+        ui.set('wg_status', self.status)
 
         try:
-            # Defensively bring down the interface first to clear any stale state.
             subprocess.run(["wg-quick", "down", self.wg_config_path], capture_output=True)
         except FileNotFoundError:
-            logging.error("[WireGuard] `wg-quick` command not found. Please run: sudo apt-get install wireguard-tools")
+            logging.error("[WireGuard] `wg-quick` command not found.")
             self.status = "No wg-quick"
-            ui.set('wg_status', self.status) # Force UI update
+            ui.set('wg_status', self.status)
             return False
 
-        # Build the configuration from the user's config.toml
         conf = f"""
 [Interface]
 PrivateKey = {self.options['private_key']}
@@ -80,61 +85,75 @@ PersistentKeepalive = 25
         try:
             with open(self.wg_config_path, "w") as f:
                 f.write(conf)
-            os.chmod(self.wg_config_path, 0o600) # Secure the config file
+            os.chmod(self.wg_config_path, 0o600)
 
-            # Bring the interface up
             subprocess.run(["wg-quick", "up", self.wg_config_path], check=True, capture_output=True)
             self.status = "Up"
-            ui.set('wg_status', self.status) # Force UI update
+            ui.set('wg_status', self.status)
             logging.info("[WireGuard] Connection established.")
             return True
 
         except subprocess.CalledProcessError as e:
             self.status = "Error"
-            ui.set('wg_status', self.status) # Force UI update
+            ui.set('wg_status', self.status)
             logging.error(f"[WireGuard] Connection failed: {e}")
             if hasattr(e, 'stderr'):
-                # Format stderr to a single line to prevent log parsing errors
                 stderr_output = e.stderr.decode('utf-8').replace('\n', ' | ').strip()
                 logging.error(f"[WireGuard] Stderr: {stderr_output}")
             return False
 
+    def _sync_handshakes(self):
+        """
+        Uses rsync to sync the handshakes directory.
+        """
+        logging.info("[WireGuard] Starting handshake sync...")
+        
+        source_dir = '/home/pi/handshakes/'
+        remote_dir = self.options['handshake_dir']
+        server_user = self.options['server_user']
+        server_ip = self.options['peer_endpoint'].split(':')[0]
+        
+        # Ensure the source directory exists
+        if not os.path.exists(source_dir):
+            logging.warning(f"[WireGuard] Source directory {source_dir} not found. Skipping sync.")
+            return
+
+        # The -e option specifies the SSH command to use, including options for non-interactive use.
+        # The trailing slash on the source directory is important - it copies the contents.
+        command = [
+            "rsync",
+            "-avz",
+            "--delete",
+            "-e", "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o UserKnownHostsFile=/dev/null",
+            source_dir,
+            f"{server_user}@{server_ip}:{remote_dir}"
+        ]
+        
+        try:
+            subprocess.run(command, check=True, capture_output=True)
+            logging.info("[WireGuard] Handshake sync successful.")
+            self.last_sync_time = time.time()
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logging.error(f"[WireGuard] Handshake sync failed: {e}")
+            if hasattr(e, 'stderr'):
+                stderr_output = e.stderr.decode('utf-8').replace('\n', ' | ').strip()
+                logging.error(f"[WireGuard] Stderr: {stderr_output}")
+
     def on_internet_available(self, agent):
         """
-        Called when internet is available. We use this to trigger the connection.
+        Called when internet is available.
         """
+        ui = agent.view()
+        
+        # First, connect if not already connected
         if self.ready and self.status not in ["Up", "Connecting"]:
-            self._connect(agent.view())
-
-    def on_handshake(self, agent, filename, access_point, client_station):
-        """
-        Called when a new handshake is captured.
-        """
+            self._connect(ui)
+        
+        # Then, check if it's time to sync
         if self.ready and self.status == "Up":
-            logging.info(f"[WireGuard] New handshake captured. Uploading {filename}...")
-            
-            remote_path = os.path.join(self.options['handshake_dir'], os.path.basename(filename))
-            server_user = self.options['server_user']
-            server_ip = self.options['peer_endpoint'].split(':')[0]
-
-            # For SCP to work without a password, SSH keys must be set up.
-            command = ["scp", "-o", "StrictHostKeyChecking=no", "-o", "BatchMode=yes", "-o", "UserKnownHostsFile=/dev/null", filename, f"{server_user}@{server_ip}:{remote_path}"]
-            
-            try:
-                subprocess.run(command, check=True, capture_output=True)
-                logging.info(f"[WireGuard] Successfully uploaded handshake to {remote_path}")
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                logging.error(f"[WireGuard] Handshake upload failed: {e}")
-                if hasattr(e, 'stderr'):
-                    stderr_output = e.stderr.decode('utf-8').replace('\n', ' | ').strip()
-                    logging.error(f"[WireGuard] Stderr: {stderr_output}")
-
-    def on_ui_update(self, ui):
-        """
-        Called when the UI is updated.
-        """
-        if self.ready:
-            ui.set('wg_status', self.status)
+            now = time.time()
+            if now - self.last_sync_time > self.sync_interval:
+                self._sync_handshakes()
 
     def on_unload(self, ui):
         """
@@ -148,7 +167,6 @@ PersistentKeepalive = 25
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 logging.error(f"[WireGuard] Failed to disconnect: {e}")
         
-        # This is the corrected block to remove the UI element
         with ui._lock:
             try:
                 ui.remove_element('wg_status')
