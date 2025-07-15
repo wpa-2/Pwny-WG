@@ -8,8 +8,8 @@ from pwnagotchi.ui.components import LabeledValue
 from pwnagotchi.ui.view import BLACK
 
 class WireGuard(plugins.Plugin):
-    __author__ = 'Your Name'
-    __version__ = '1.2.0' # The Rsync Update
+    __author__ = 'WPA2'
+    __version__ = '1.3.0'
     __license__ = 'GPL3'
     __description__ = 'A plugin to automatically connect to a WireGuard VPN and sync handshakes using rsync.'
 
@@ -18,40 +18,29 @@ class WireGuard(plugins.Plugin):
         self.status = "Initializing"
         self.wg_config_path = "/tmp/wg0.conf"
         self.last_sync_time = 0
-        # Sync every 10 minutes (600 seconds)
         self.sync_interval = 600
 
     def on_loaded(self):
-        """
-        Called when the plugin is loaded.
-        """
         logging.info("[WireGuard] Rsync plugin loaded.")
         if not self.options or 'private_key' not in self.options:
             logging.error("[WireGuard] Configuration is missing. Please edit /etc/pwnagotchi/config.toml")
             return
-        # Check for rsync dependency
         if not os.path.exists('/usr/bin/rsync'):
             logging.error("[WireGuard] rsync is not installed. Please run: sudo apt-get install rsync")
             return
         self.ready = True
 
     def on_ui_setup(self, ui):
-        """
-        This method is called when the UI is Displayed to add a new element.
-        """
         ui.add_element('wg_status', LabeledValue(
             color=BLACK,
             label='WG:',
             value=self.status,
-            position=(60, 0), # Position (X, Y) from top-left
+            position=(60, 0),
             label_font=fonts.Small,
             text_font=fonts.Small
         ))
 
     def _connect(self, ui):
-        """
-        Builds the config and brings the WireGuard interface up.
-        """
         logging.info("[WireGuard] Attempting to connect...")
         self.status = "Connecting"
         ui.set('wg_status', self.status)
@@ -103,36 +92,46 @@ PersistentKeepalive = 25
             return False
 
     def _sync_handshakes(self):
-        """
-        Uses rsync to sync the handshakes directory.
-        """
         logging.info("[WireGuard] Starting handshake sync...")
         
         source_dir = '/home/pi/handshakes/'
         remote_dir = self.options['handshake_dir']
         server_user = self.options['server_user']
-        server_ip = self.options['peer_endpoint'].split(':')[0]
+        server_vpn_ip = ".".join(self.options['address'].split('.')[:3]) + ".1"
         
-        # Ensure the source directory exists
         if not os.path.exists(source_dir):
             logging.warning(f"[WireGuard] Source directory {source_dir} not found. Skipping sync.")
             return
 
-        # The -e option specifies the SSH command to use, including options for non-interactive use.
-        # The trailing slash on the source directory is important - it copies the contents.
         command = [
             "rsync",
             "-avz",
+            "--stats",
             "--delete",
             "-e", "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o UserKnownHostsFile=/dev/null",
             source_dir,
-            f"{server_user}@{server_ip}:{remote_dir}"
+            f"{server_user}@{server_vpn_ip}:{remote_dir}"
         ]
         
         try:
-            subprocess.run(command, check=True, capture_output=True)
-            logging.info("[WireGuard] Handshake sync successful.")
+            result = subprocess.run(command, check=True, capture_output=True, text=True)
+            
+            new_files = 0
+            for line in result.stdout.splitlines():
+                if "Number of created files:" in line:
+                    try:
+                        new_files = int(line.split(":")[1].strip())
+                        break
+                    except (ValueError, IndexError):
+                        pass
+
+            if new_files > 0:
+                logging.info(f"[WireGuard] Handshake sync to {server_vpn_ip} successful. Transferred {new_files} new files.")
+            else:
+                logging.info(f"[WireGuard] Handshake sync to {server_vpn_ip} successful. No new files to transfer.")
+            
             self.last_sync_time = time.time()
+
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             logging.error(f"[WireGuard] Handshake sync failed: {e}")
             if hasattr(e, 'stderr'):
@@ -140,25 +139,17 @@ PersistentKeepalive = 25
                 logging.error(f"[WireGuard] Stderr: {stderr_output}")
 
     def on_internet_available(self, agent):
-        """
-        Called when internet is available.
-        """
         ui = agent.view()
         
-        # First, connect if not already connected
         if self.ready and self.status not in ["Up", "Connecting"]:
             self._connect(ui)
         
-        # Then, check if it's time to sync
         if self.ready and self.status == "Up":
             now = time.time()
             if now - self.last_sync_time > self.sync_interval:
                 self._sync_handshakes()
 
     def on_unload(self, ui):
-        """
-        Called when the plugin is unloaded.
-        """
         logging.info("[WireGuard] Unloading plugin and disconnecting.")
         if os.path.exists(self.wg_config_path):
             try:
