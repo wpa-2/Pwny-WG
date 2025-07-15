@@ -1,6 +1,6 @@
 # Pwnagotchi WireGuard Plugin
 
-This plugin allows your Pwnagotchi to automatically connect to a home WireGuard VPN server, enabling secure remote access (SSH, Web UI) and automatic exfiltration of captured handshakes to your server.
+This plugin allows your Pwnagotchi to automatically connect to a home WireGuard VPN server. Once connected, it enables secure remote access (SSH, Web UI) and periodically synchronizes the entire `handshakes` directory to your server using `rsync` to ensure no data is lost.
 
 ## Table of Contents
 1.  [Prerequisites](#prerequisites)
@@ -8,7 +8,7 @@ This plugin allows your Pwnagotchi to automatically connect to a home WireGuard 
 3.  [Step 2: Pwnagotchi Dependency Installation](#step-2-pwnagotchi-dependency-installation)
 4.  [Step 3: Pwnagotchi Plugin Installation](#step-3-pwnagotchi-plugin-installation)
 5.  [Step 4: Pwnagotchi Configuration](#step-4-pwnagotchi-configuration)
-6.  [Step 5: Enable Handshake Uploads (Pwnagotchi -> Server)](#step-5-enable-handshake-uploads-pwnagotchi---server)
+6.  [Step 5: Enable Handshake Sync (Pwnagotchi -> Server)](#step-5-enable-handshake-sync-pwnagotchi---server)
 7.  [Step 6: Enable Remote SSH (Your PC -> Pwnagotchi)](#step-6-enable-remote-ssh-your-pc---pwnagotchi)
 8.  [Step 7: Enable Remote Web UI](#step-7-enable-remote-web-ui)
 9.  [Step 8: Final Restart and Verification](#step-8-final-restart-and-verification)
@@ -42,11 +42,11 @@ On your WireGuard server, you need to create a new client profile for your Pwnag
 
 ### Step 2: Pwnagotchi Dependency Installation
 
-Log into your Pwnagotchi via SSH or direct connection and install the necessary tools.
+Log into your Pwnagotchi via SSH or direct connection and install the necessary tools. `rsync` is now required for syncing handshakes.
 
 ```bash
 sudo apt-get update
-sudo apt-get install wireguard-tools openresolv git
+sudo apt-get install wireguard-tools openresolv rsync git
 ```
 
 ---
@@ -84,16 +84,16 @@ sudo apt-get install wireguard-tools openresolv git
     main.plugins.wireguard.preshared_key = "PASTE_PRESHARED_KEY_HERE" # If you have one
     main.plugins.wireguard.peer_endpoint = "PASTE_SERVER_ENDPOINT_HERE"
 
-    # --- Handshake Upload Configuration ---
+    # --- Handshake Sync Configuration ---
     main.plugins.wireguard.server_user = "your-user-on-server"
     main.plugins.wireguard.handshake_dir = "/path/to/handshakes/on/server/"
     ```
 
 ---
 
-### Step 5: Enable Handshake Uploads (Pwnagotchi -> Server)
+### Step 5: Enable Handshake Sync (Pwnagotchi -> Server)
 
-For the plugin to automatically upload handshakes, the Pwnagotchi's `root` user needs an SSH key that your server trusts.
+For the plugin to automatically sync handshakes with `rsync`, the Pwnagotchi's `root` user needs an SSH key that your server trusts.
 
 1.  **On the Pwnagotchi**, generate a key for the `root` user. Press Enter at all prompts to accept the defaults.
     ```bash
