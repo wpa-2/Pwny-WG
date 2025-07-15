@@ -10,7 +10,7 @@ This plugin allows your Pwnagotchi to automatically connect to a home WireGuard 
 5.  [Step 4: Pwnagotchi Configuration](#step-4-pwnagotchi-configuration)
 6.  [Step 5: Enable Handshake Sync (Pwnagotchi -> Server)](#step-5-enable-handshake-sync-pwnagotchi---server)
 7.  [Step 6: Enable Remote SSH (Your PC -> Pwnagotchi)](#step-6-enable-remote-ssh-your-pc---pwnagotchi)
-8.  [Step 7: Enable Remote Web UI](#step-7-enable-remote-web-ui)
+8.  [Step 7: Enable Remote Access (Web UI & SSH)](#step-7-enable-remote-access-web-ui--ssh)
 9.  [Step 8: Final Restart and Verification](#step-8-final-restart-and-verification)
 10. [Troubleshooting](#troubleshooting)
 
@@ -143,31 +143,38 @@ To SSH into your Pwnagotchi over the VPN, your Pwnagotchi needs to trust the mac
 
 ---
 
-### Step 7: Enable Remote Web UI
+### Step 7: Enable Remote Access (Web UI & SSH)
 
-To access the Pwnagotchi Web UI from other devices on your home network, you must configure your WireGuard server to forward traffic.
+To access the Pwnagotchi from other devices (like your phone on the VPN or a PC on your home network), you must configure your WireGuard server to forward traffic correctly.
 
 1.  **On your WireGuard Server**, enable IP forwarding:
     ```bash
     # Uncomment the net.ipv4.ip_forward=1 line
     sudo nano /etc/sysctl.conf
-    # Apply the change
+    # Apply the change immediately
     sudo sysctl -p
     ```
 
-2.  **On your WireGuard Server**, add forwarding rules to the WireGuard config file (`/etc/wireguard/wg0.conf`). Replace `eth0` with your server's main LAN interface name (e.g., `enp3s0`).
+2.  **On your WireGuard Server**, add comprehensive forwarding rules to the WireGuard config file (`/etc/wireguard/wg0.conf`). Replace `eth0` with your server's main LAN interface name (e.g., `enp3s0`).
+
     ```ini
-    # Add these two lines under the [Interface] section
+    # Add these lines under the [Interface] section of wg0.conf
+    
+    # Rule for VPN clients to access your home LAN and the internet
     PostUp = iptables -A FORWARD -i %i -o eth0 -j ACCEPT; iptables -A FORWARD -i eth0 -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
     PostDown = iptables -D FORWARD -i %i -o eth0 -j ACCEPT; iptables -D FORWARD -i eth0 -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+    
+    # Rule for VPN clients to talk to each other (e.g., phone -> pwnagotchi)
+    PostUp = iptables -A FORWARD -i %i -o %i -j ACCEPT
+    PostDown = iptables -D FORWARD -i %i -o %i -j ACCEPT
     ```
 
-3.  **On your Pwnagotchi**, add your home network to the web UI whitelist. Edit `/etc/pwnagotchi/config.toml` and add this block. Replace `192.168.1.0/24` with your actual home network range.
+3.  **On your Pwnagotchi**, add your trusted networks to the web UI whitelist. Edit `/etc/pwnagotchi/config.toml` and add this block. Replace `192.168.1.0/24` with your actual home network range.
     ```toml
     main.ui.web.whitelist = [
       "127.0.0.1",
       "::1",
-      "10.16.244.1",      # Your server's VPN IP
+      "10.16.244.0/24",   # Your entire VPN network
       "192.168.1.0/24",   # Your home LAN
     ]
     ```
@@ -187,8 +194,8 @@ To access the Pwnagotchi Web UI from other devices on your home network, you mus
     ```
 
 3.  **Verify:**
-    * From your remote machine, SSH into the Pwnagotchi using its VPN IP: `ssh pi@10.16.244.5`
-    * From your desktop PC, open a browser to the Web UI: `http://10.16.244.5:8080`
+    * From your remote machine (phone or PC), SSH into the Pwnagotchi using its VPN IP: `ssh pi@10.16.244.6`
+    * From your remote machine (phone or PC), open a browser to the Web UI: `http://10.16.244.6:8080`
 
 ---
 
