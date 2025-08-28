@@ -16,7 +16,7 @@ class WireGuard(plugins.Plugin):
 
     def __init__(self):
         self.ready = False
-        self.status = "Initializing"
+        self.status = "Starting"
         self.wg_config_path = "/tmp/wg0.conf"
         self.last_sync_time = 0
         self.sync_interval = 600
@@ -42,7 +42,6 @@ class WireGuard(plugins.Plugin):
             color=BLACK,
             label='WG:',
             value=self.status,
-            # FIX 2: Call the width() method with parentheses.
             position=(self.ui.width() // 2 - 25, 0),
             label_font=fonts.Small,
             text_font=fonts.Small
@@ -51,12 +50,10 @@ class WireGuard(plugins.Plugin):
     def _connect(self):
         logging.info("[WireGuard] Attempting to connect...")
         self.status = "Connecting"
-        # FIX 1: Check if self.ui has been initialized before using it.
         if hasattr(self, 'ui'):
             self.ui.set('wg_status', self.status)
 
         try:
-            # Using /dev/null for stdout and stderr to silence the command if it fails because the interface doesn't exist.
             subprocess.run(["wg-quick", "down", self.wg_config_path], capture_output=True)
         except FileNotFoundError:
             logging.error("[WireGuard] `wg-quick` command not found.")
@@ -140,21 +137,16 @@ PersistentKeepalive = 25
 
             if new_files > 0:
                 logging.info(f"[WireGuard] Handshake sync to {server_vpn_ip} successful. Transferred {new_files} new files.")
-                # FIX 1: Check if self.ui has been initialized.
                 if hasattr(self, 'ui'):
                     self.ui.set('wg_status', f"Synced: {new_files}")
             else:
                 logging.info(f"[WireGuard] Handshake sync to {server_vpn_ip} successful. No new files to transfer.")
-                # FIX 1: Check if self.ui has been initialized.
                 if hasattr(self, 'ui'):
                     self.ui.set('wg_status', "Synced: 0")
             
             self.last_sync_time = time.time()
-            # After a few seconds, revert the status back to "Up"
             time.sleep(15)
-            # Only change back to 'Up' if the status hasn't changed to something else (like 'Connecting')
             if self.status == "Up":
-                # FIX 1: Check if self.ui has been initialized.
                 if hasattr(self, 'ui'):
                      self.ui.set('wg_status', "Up")
 
