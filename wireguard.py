@@ -42,7 +42,8 @@ class WireGuard(plugins.Plugin):
             color=BLACK,
             label='WG:',
             value=self.status,
-            position=(self.ui.width // 2 - 25, 0),
+            # FIX 2: Call the width() method with parentheses.
+            position=(self.ui.width() // 2 - 25, 0),
             label_font=fonts.Small,
             text_font=fonts.Small
         ))
@@ -50,14 +51,18 @@ class WireGuard(plugins.Plugin):
     def _connect(self):
         logging.info("[WireGuard] Attempting to connect...")
         self.status = "Connecting"
-        self.ui.set('wg_status', self.status)
+        # FIX 1: Check if self.ui has been initialized before using it.
+        if hasattr(self, 'ui'):
+            self.ui.set('wg_status', self.status)
 
         try:
+            # Using /dev/null for stdout and stderr to silence the command if it fails because the interface doesn't exist.
             subprocess.run(["wg-quick", "down", self.wg_config_path], capture_output=True)
         except FileNotFoundError:
             logging.error("[WireGuard] `wg-quick` command not found.")
             self.status = "No wg-quick"
-            self.ui.set('wg_status', self.status)
+            if hasattr(self, 'ui'):
+                self.ui.set('wg_status', self.status)
             return False
             
         server_vpn_ip = ".".join(self.options['address'].split('.')[:3]) + ".1"
@@ -84,17 +89,19 @@ PersistentKeepalive = 25
             with open(self.wg_config_path, "w") as f:
                 f.write(conf)
             os.chmod(self.wg_config_path, 0o600)
-            subprocess.run(["wg-quick", "up", self.wg_config_path], check=True, capture_output=True)
+            subprocess.run(["wg-quick", "up", self.wg_config_path], check=True, capture_output=True, text=True)
             self.status = "Up"
-            self.ui.set('wg_status', self.status)
+            if hasattr(self, 'ui'):
+                self.ui.set('wg_status', self.status)
             logging.info("[WireGuard] Connection established.")
             return True
         except subprocess.CalledProcessError as e:
             self.status = "Error"
-            self.ui.set('wg_status', self.status)
+            if hasattr(self, 'ui'):
+                self.ui.set('wg_status', self.status)
             logging.error(f"[WireGuard] Connection failed: {e}")
             if hasattr(e, 'stderr'):
-                stderr_output = e.stderr.decode('utf-8').replace('\n', ' | ').strip()
+                stderr_output = e.stderr.replace('\n', ' | ').strip()
                 logging.error(f"[WireGuard] Stderr: {stderr_output}")
             return False
 
@@ -133,22 +140,28 @@ PersistentKeepalive = 25
 
             if new_files > 0:
                 logging.info(f"[WireGuard] Handshake sync to {server_vpn_ip} successful. Transferred {new_files} new files.")
-                self.ui.set('wg_status', f"Synced: {new_files}")
+                # FIX 1: Check if self.ui has been initialized.
+                if hasattr(self, 'ui'):
+                    self.ui.set('wg_status', f"Synced: {new_files}")
             else:
                 logging.info(f"[WireGuard] Handshake sync to {server_vpn_ip} successful. No new files to transfer.")
-                self.ui.set('wg_status', "Synced: 0")
+                # FIX 1: Check if self.ui has been initialized.
+                if hasattr(self, 'ui'):
+                    self.ui.set('wg_status', "Synced: 0")
             
             self.last_sync_time = time.time()
             # After a few seconds, revert the status back to "Up"
             time.sleep(15)
             # Only change back to 'Up' if the status hasn't changed to something else (like 'Connecting')
             if self.status == "Up":
-                 self.ui.set('wg_status', "Up")
+                # FIX 1: Check if self.ui has been initialized.
+                if hasattr(self, 'ui'):
+                     self.ui.set('wg_status', "Up")
 
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             logging.error(f"[WireGuard] Handshake sync failed: {e}")
-            if hasattr(e, 'stderr'):
-                stderr_output = e.stderr.decode('utf-8').replace('\n', ' | ').strip()
+            if hasattr(e, 'stderr') and e.stderr:
+                stderr_output = e.stderr.replace('\n', ' | ').strip()
                 logging.error(f"[WireGuard] Stderr: {stderr_output}")
 
     def on_internet_available(self, agent):
