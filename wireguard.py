@@ -10,7 +10,7 @@ from pwnagotchi.ui.view import BLACK
 
 class WireGuard(plugins.Plugin):
     __author__ = 'WPA2'
-    __version__ = '2.2.0'
+    __version__ = '1.0'
     __license__ = 'GPL3'
     __description__ = 'A plugin to connect to WireGuard and sync handshakes with a startup delay and UI notifications.'
 
