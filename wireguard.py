@@ -125,7 +125,7 @@ PersistentKeepalive = 25
 
         try:
             result = subprocess.run(command, check=True, capture_output=True, text=True)
-            
+            stdout_formatted = result.stdout.replace('\n', ' | ')
             new_files = 0
             for line in result.stdout.splitlines():
                 if "Number of created files:" in line:
