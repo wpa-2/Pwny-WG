@@ -11,7 +11,7 @@ from pwnagotchi.ui.view import BLACK
 
 class WireGuard(plugins.Plugin):
     __author__ = 'WPA2'
-    __version__ = '1.4'
+    __version__ = '1.5'
     __license__ = 'GPL3'
     __description__ = 'Connects to WireGuard and syncs handshakes via custom SSH port.'
 
@@ -139,7 +139,7 @@ PersistentKeepalive = 25
             if not os.path.exists(source_dir):
                 return
 
-            # Explicitly set the key file to id_ed25519 to match the rename we just did
+            # Explicitly force id_ed25519 key
             ssh_cmd = f"ssh -p {ssh_port} -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
             
             command = [
@@ -179,8 +179,6 @@ PersistentKeepalive = 25
                 logging.error(f"[WireGuard] Sync Exception: {e}")
             
             finally:
-                # IMPORTANT: Update the time regardless of success or failure
-                # This prevents the infinite spam loop if sync fails.
                 self.last_sync_time = time.time()
 
     def on_internet_available(self, agent):
@@ -193,10 +191,13 @@ PersistentKeepalive = 25
             time.sleep(delay)
             self.initial_boot = False
         
-        if self.status != "Up":
+        # FIX: Only connect if we are definitely DOWN, ERROR, or Initializing
+        # Do NOT connect if we are "Up" or currently "Sync: X"
+        if self.status in ["Init", "Down", "Err"]:
             self._connect()
         
-        elif self.status == "Up":
+        # Trigger sync if Up OR currently Syncing (to allow retries if logic permits)
+        elif self.status == "Up" or self.status.startswith("Sync"):
             if self.lock.locked():
                 return 
 
