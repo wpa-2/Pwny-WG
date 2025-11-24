@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 import time
+import threading
 
 import pwnagotchi.plugins as plugins
 import pwnagotchi.ui.fonts as fonts
@@ -10,58 +11,77 @@ from pwnagotchi.ui.view import BLACK
 
 class WireGuard(plugins.Plugin):
     __author__ = 'WPA2'
-    __version__ = '1.0'
+    __version__ = '1.3'
     __license__ = 'GPL3'
-    __description__ = 'A plugin to connect to WireGuard and sync handshakes with a startup delay and UI notifications.'
+    __description__ = 'Connects to WireGuard and syncs handshakes.'
 
     def __init__(self):
         self.ready = False
-        self.status = "Starting"
+        self.status = "Init"
         self.wg_config_path = "/tmp/wg0.conf"
         self.last_sync_time = 0
         self.sync_interval = 600
-        self.initial_boot = True # Flag to run startup sequence only once
+        self.initial_boot = True
+        self.lock = threading.Lock()
 
     def on_loaded(self):
-        logging.info("[WireGuard] Plugin loaded.")
-        # Load configurable options or set defaults
-        self.options.setdefault('startup_delay_secs', 60)
+        required_ops = ['private_key', 'address', 'peer_public_key', 'peer_endpoint', 'handshake_dir', 'server_user']
+        missing = [op for op in required_ops if op not in self.options]
         
-        if 'private_key' not in self.options:
-            logging.error("[WireGuard] Configuration is missing. Please edit /etc/pwnagotchi/config.toml")
+        if missing:
+            logging.error(f"[WireGuard] Missing config: {', '.join(missing)}")
             return
+
         if not os.path.exists('/usr/bin/rsync'):
-            logging.error("[WireGuard] rsync is not installed. Please run: sudo apt-get install rsync")
+            logging.error("[WireGuard] rsync is not installed. Run: sudo apt-get install rsync")
             return
+
+        self.options.setdefault('startup_delay_secs', 60)
+        # Default to port 22 if the user doesn't specify one
+        self.options.setdefault('server_port', 22)
+        
         self.ready = True
+        logging.info("[WireGuard] Plugin loaded and ready.")
 
     def on_ui_setup(self, ui):
-        # Store the ui object to use it in other methods
         self.ui = ui
-        self.ui.add_element('wg_status', LabeledValue(
-            color=BLACK,
-            label='WG:',
-            value=self.status,
-            position=(self.ui.width() // 2 - 25, 0),
-            label_font=fonts.Small,
-            text_font=fonts.Small
-        ))
+        try:
+            ui.add_element('wg_status', LabeledValue(
+                color=BLACK,
+                label='WG:',
+                value=self.status,
+                position=(ui.width() // 2 - 25, 0),
+                label_font=fonts.Small,
+                text_font=fonts.Small
+            ))
+        except Exception as e:
+            logging.error(f"[WireGuard] UI Setup Error: {e}")
+
+    def update_status(self, text):
+        self.status = text
+        if hasattr(self, 'ui'):
+            try:
+                self.ui.set('wg_status', text)
+            except Exception:
+                pass
+
+    def _cleanup_interface(self):
+        subprocess.run(["wg-quick", "down", self.wg_config_path], 
+                       stdout=subprocess.DEVNULL, 
+                       stderr=subprocess.DEVNULL)
+        subprocess.run(["ip", "link", "delete", "dev", "wg0"], 
+                       stdout=subprocess.DEVNULL, 
+                       stderr=subprocess.DEVNULL)
 
     def _connect(self):
-        logging.info("[WireGuard] Attempting to connect...")
-        self.status = "Connecting"
-        if hasattr(self, 'ui'):
-            self.ui.set('wg_status', self.status)
+        if self.lock.locked():
+            return
 
-        try:
-            subprocess.run(["wg-quick", "down", self.wg_config_path], capture_output=True)
-        except FileNotFoundError:
-            logging.error("[WireGuard] `wg-quick` command not found.")
-            self.status = "No wg-quick"
-            if hasattr(self, 'ui'):
-                self.ui.set('wg_status', self.status)
-            return False
-            
+        logging.info("[WireGuard] Attempting to connect...")
+        self.update_status("Conn...")
+
+        self._cleanup_interface()
+
         server_vpn_ip = ".".join(self.options['address'].split('.')[:3]) + ".1"
 
         conf = f"""[Interface]
@@ -78,7 +98,6 @@ Endpoint = {self.options['peer_endpoint']}
 AllowedIPs = {server_vpn_ip}/32
 PersistentKeepalive = 25
 """
-
         if 'preshared_key' in self.options:
             conf += f"PresharedKey = {self.options['preshared_key']}\n"
 
@@ -86,75 +105,78 @@ PersistentKeepalive = 25
             with open(self.wg_config_path, "w") as f:
                 f.write(conf)
             os.chmod(self.wg_config_path, 0o600)
-            subprocess.run(["wg-quick", "up", self.wg_config_path], check=True, capture_output=True, text=True)
-            self.status = "Up"
-            if hasattr(self, 'ui'):
-                self.ui.set('wg_status', self.status)
-            logging.info("[WireGuard] Connection established.")
-            return True
-        except subprocess.CalledProcessError as e:
-            self.status = "Error"
-            if hasattr(self, 'ui'):
-                self.ui.set('wg_status', self.status)
-            logging.error(f"[WireGuard] Connection failed: {e}")
-            if hasattr(e, 'stderr'):
-                stderr_output = e.stderr.replace('\n', ' | ').strip()
-                logging.error(f"[WireGuard] Stderr: {stderr_output}")
+
+            process = subprocess.run(
+                ["wg-quick", "up", self.wg_config_path],
+                capture_output=True,
+                text=True
+            )
+
+            if process.returncode == 0:
+                self.update_status("Up")
+                logging.info("[WireGuard] Connection established.")
+                return True
+            else:
+                self.update_status("Err")
+                clean_err = process.stderr.replace('\n', ' ')
+                logging.error(f"[WireGuard] Connect fail: {clean_err}")
+                return False
+
+        except Exception as e:
+            self.update_status("Err")
+            logging.error(f"[WireGuard] Critical Error: {e}")
             return False
 
     def _sync_handshakes(self):
-        logging.info("[WireGuard] Starting handshake sync...")
-        
-        source_dir = '/home/pi/handshakes/'
-        remote_dir = self.options['handshake_dir']
-        server_user = self.options['server_user']
-        server_vpn_ip = ".".join(self.options['address'].split('.')[:3]) + ".1"
-        
-        if not os.path.exists(source_dir):
-            logging.warning(f"[WireGuard] Source directory {source_dir} not found. Skipping sync.")
-            return
-
-        command = [
-            "rsync",
-            "-avz",
-            "--stats",
-            "-e", "ssh -o StrictHostKeyChecking=no -o BatchMode=yes -o UserKnownHostsFile=/dev/null",
-            source_dir,
-            f"{server_user}@{server_vpn_ip}:{remote_dir}"
-        ]
-
-        try:
-            result = subprocess.run(command, check=True, capture_output=True, text=True)
-            stdout_formatted = result.stdout.replace('\n', ' | ')
-            new_files = 0
-            for line in result.stdout.splitlines():
-                if "Number of created files:" in line:
-                    try:
-                        new_files = int(line.split(":")[1].strip().split(" ")[0])
-                        break
-                    except (ValueError, IndexError):
-                        pass
-
-            if new_files > 0:
-                logging.info(f"[WireGuard] Handshake sync to {server_vpn_ip} successful. Transferred {new_files} new files.")
-                if hasattr(self, 'ui'):
-                    self.ui.set('wg_status', f"Synced: {new_files}")
-            else:
-                logging.info(f"[WireGuard] Handshake sync to {server_vpn_ip} successful. No new files to transfer.")
-                if hasattr(self, 'ui'):
-                    self.ui.set('wg_status', "Synced: 0")
+        with self.lock:
+            logging.info("[WireGuard] Starting handshake sync...")
             
-            self.last_sync_time = time.time()
-            time.sleep(15)
-            if self.status == "Up":
-                if hasattr(self, 'ui'):
-                     self.ui.set('wg_status', "Up")
+            source_dir = '/home/pi/handshakes/'
+            remote_dir = self.options['handshake_dir']
+            server_user = self.options['server_user']
+            server_vpn_ip = ".".join(self.options['address'].split('.')[:3]) + ".1"
+            ssh_port = self.options['server_port']
+            
+            if not os.path.exists(source_dir):
+                return
 
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            logging.error(f"[WireGuard] Handshake sync failed: {e}")
-            if hasattr(e, 'stderr') and e.stderr:
-                stderr_output = e.stderr.replace('\n', ' | ').strip()
-                logging.error(f"[WireGuard] Stderr: {stderr_output}")
+            # Added -p {ssh_port} to the ssh command inside rsync
+            command = [
+                "rsync", "-avz", "--stats", "--timeout=10",
+                "-e", f"ssh -p {ssh_port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5",
+                source_dir,
+                f"{server_user}@{server_vpn_ip}:{remote_dir}"
+            ]
+
+            try:
+                result = subprocess.run(command, capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    new_files = 0
+                    for line in result.stdout.splitlines():
+                        if "Number of created files:" in line:
+                            try:
+                                parts = line.split(":")
+                                if len(parts) > 1:
+                                    new_files = int(parts[1].strip().split()[0])
+                            except: pass
+                    
+                    msg = f"Sync: {new_files}"
+                    self.update_status(msg)
+                    if new_files > 0:
+                        logging.info(f"[WireGuard] Transferred {new_files} handshakes.")
+                    
+                    self.last_sync_time = time.time()
+                    threading.Timer(10.0, self.update_status, ["Up"]).start()
+                else:
+                    logging.error(f"[WireGuard] Sync Error: {result.stderr}")
+                    if "Connection refused" in result.stderr or "unreachable" in result.stderr:
+                         logging.warning("[WireGuard] Connection appears dead. Resetting...")
+                         self.update_status("Down")
+                         self._cleanup_interface()
+
+            except Exception as e:
+                logging.error(f"[WireGuard] Sync Exception: {e}")
 
     def on_internet_available(self, agent):
         if not self.ready:
@@ -162,29 +184,28 @@ PersistentKeepalive = 25
 
         if self.initial_boot:
             delay = self.options['startup_delay_secs']
-            logging.info(f"[WireGuard] Internet detected. Waiting {delay}s for system to settle...")
+            logging.debug(f"[WireGuard] Waiting {delay}s startup delay...")
             time.sleep(delay)
             self.initial_boot = False
         
-        if self.status not in ["Up", "Connecting"]:
+        if self.status != "Up":
             self._connect()
         
-        if self.status == "Up":
+        elif self.status == "Up":
+            if self.lock.locked():
+                return 
+
             now = time.time()
             if now - self.last_sync_time > self.sync_interval:
-                self._sync_handshakes()
+                threading.Thread(target=self._sync_handshakes).start()
 
     def on_unload(self, ui):
-        logging.info("[WireGuard] Unloading plugin and disconnecting.")
+        logging.info("[WireGuard] Unloading...")
+        self._cleanup_interface()
         if os.path.exists(self.wg_config_path):
             try:
-                subprocess.run(["wg-quick", "down", self.wg_config_path], check=True, capture_output=True)
                 os.remove(self.wg_config_path)
-            except (subprocess.CalledProcessError, FileNotFoundError) as e:
-                logging.error(f"[WireGuard] Failed to disconnect: {e}")
-        
-        with ui._lock:
-            try:
-                ui.remove_element('wg_status')
-            except KeyError:
-                pass
+            except: pass
+        try:
+            ui.remove_element('wg_status')
+        except: pass
