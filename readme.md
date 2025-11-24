@@ -110,32 +110,28 @@ main.plugins.wireguard.startup_delay_secs = 60
 
 ### Step 5: Enable Passwordless Sync (SSH Key Setup)
 
-For the plugin to automatically sync files, the Pwnagotchi (running as `root`) needs to be able to SSH into your server without a password.
+For the plugin to automatically sync files, the Pwnagotchi (running as `root`) needs permission to log into your server. We will generate a key and send it to your server using a utility that handles file permissions automatically.
 
-**Method A: Generate New Keys (Recommended for fresh installs)**
-1.  **On the Pwnagotchi**, generate an SSH key for the `root` user. Press Enter at all prompts (do not set a password).
+1.  **Generate a Key for Root:**
+    Run this on your Pwnagotchi. Press **Enter** at all prompts to accept defaults (do not set a password).
     ```bash
     sudo ssh-keygen -t ed25519
     ```
-2.  **On the Pwnagotchi**, display the new public key and copy the entire output.
+
+2.  **Send Key to Server:**
+    Run this command to automatically copy the key to your server.
+    *(Replace `2222` with your SSH port, `your-server-user` with your actual username, and `10.x.x.x` with your server IP).*
+
     ```bash
-    sudo cat /root/.ssh/id_ed25519.pub
+    sudo ssh-copy-id -i /root/.ssh/id_ed25519.pub -p 2222 your-server-user@10.x.x.x
     ```
+    *You will be asked for your server password one last time. Once it says "Number of key(s) added: 1", you are done!*
 
-**Method B: Copy 'pi' Keys (If you already set up keys for user 'pi')**
-If you already set up SSH keys for the `pi` user, you can copy them to root:
-```bash
-sudo mkdir -p /root/.ssh
-sudo cp /home/pi/.ssh/id_ed25519* /root/.ssh/
-sudo chown root:root /root/.ssh/id_ed25519*
-```
-
-**Final Step:**
-**On your Server**, add the Pwnagotchi's public key (from Step 2 or Method B) to the `authorized_keys` file for the user you specified in `server_user`.
-```bash
-# Replace 'your-user-on-server' with the actual username
-echo "PASTE_PWNAGOTCHI_PUBLIC_KEY_HERE" >> /home/your-user-on-server/.ssh/authorized_keys
-```
+3.  **Test the Connection:**
+    Verify it works without a password:
+    ```bash
+    sudo ssh -p 2222 your-server-user@10.x.x.x "echo Connection Successful"
+    ```
 
 ---
 

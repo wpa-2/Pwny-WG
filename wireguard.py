@@ -11,9 +11,9 @@ from pwnagotchi.ui.view import BLACK
 
 class WireGuard(plugins.Plugin):
     __author__ = 'WPA2'
-    __version__ = '1.3'
+    __version__ = '1.4'
     __license__ = 'GPL3'
-    __description__ = 'Connects to WireGuard and syncs handshakes.'
+    __description__ = 'Connects to WireGuard and syncs handshakes via custom SSH port.'
 
     def __init__(self):
         self.ready = False
@@ -37,7 +37,6 @@ class WireGuard(plugins.Plugin):
             return
 
         self.options.setdefault('startup_delay_secs', 60)
-        # Default to port 22 if the user doesn't specify one
         self.options.setdefault('server_port', 22)
         
         self.ready = True
@@ -140,10 +139,12 @@ PersistentKeepalive = 25
             if not os.path.exists(source_dir):
                 return
 
-            # Added -p {ssh_port} to the ssh command inside rsync
+            # Explicitly set the key file to id_ed25519 to match the rename we just did
+            ssh_cmd = f"ssh -p {ssh_port} -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
+            
             command = [
-                "rsync", "-avz", "--stats", "--timeout=10",
-                "-e", f"ssh -p {ssh_port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=5",
+                "rsync", "-avz", "--stats", "--timeout=20",
+                "-e", ssh_cmd,
                 source_dir,
                 f"{server_user}@{server_vpn_ip}:{remote_dir}"
             ]
@@ -166,7 +167,6 @@ PersistentKeepalive = 25
                     if new_files > 0:
                         logging.info(f"[WireGuard] Transferred {new_files} handshakes.")
                     
-                    self.last_sync_time = time.time()
                     threading.Timer(10.0, self.update_status, ["Up"]).start()
                 else:
                     logging.error(f"[WireGuard] Sync Error: {result.stderr}")
@@ -177,6 +177,11 @@ PersistentKeepalive = 25
 
             except Exception as e:
                 logging.error(f"[WireGuard] Sync Exception: {e}")
+            
+            finally:
+                # IMPORTANT: Update the time regardless of success or failure
+                # This prevents the infinite spam loop if sync fails.
+                self.last_sync_time = time.time()
 
     def on_internet_available(self, agent):
         if not self.ready:
